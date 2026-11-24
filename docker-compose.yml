@@ -1,0 +1,17 @@
+services:
+  clip-engine:
+    build: .
+    image: clip-engine:local
+    container_name: clip-engine
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data
+    mem_limit: 2600m
+    networks:
+      - n8nnet
+
+networks:
+  n8nnet:
+    external: true
+    name: ${N8N_NETWORK:-n8n_default}

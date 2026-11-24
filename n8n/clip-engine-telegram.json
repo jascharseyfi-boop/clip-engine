@@ -1,0 +1,309 @@
+{
+ "name": "Clip-Engine (Telegram-Freigabe + YouTube)",
+ "nodes": [
+  {
+   "parameters": {
+    "updates": [
+     "message",
+     "callback_query"
+    ],
+    "additionalFields": {}
+   },
+   "id": "b1dcc173-5715-40a6-aacc-4afdfec62873",
+   "name": "Clip-Bot",
+   "type": "n8n-nodes-base.telegramTrigger",
+   "typeVersion": 1.2,
+   "position": [
+    0,
+    300
+   ],
+   "webhookId": "d76da977-8ef2-43f3-8314-56154d00245c",
+   "credentials": {
+    "telegramApi": {
+     "name": "Clip-Engine Bot"
+    }
+   }
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "boolean": [
+      {
+       "value1": "={{ !!$json.callback_query }}",
+       "value2": true
+      }
+     ]
+    }
+   },
+   "id": "97ccc727-86ed-4ef9-94dd-a9f81bc45901",
+   "name": "Button geklickt?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    220,
+    300
+   ]
+  },
+  {
+   "parameters": {
+    "method": "POST",
+    "url": "http://clip-engine:8000/telegram/message",
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpHeaderAuth",
+    "options": {},
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({ text: $json.message?.text || $json.message?.caption || '', chat_id: String($json.message?.chat?.id || ''), message_id: $json.message?.message_id }) }}"
+   },
+   "id": "33079b6e-dea5-43f2-bdd7-39aff079a33b",
+   "name": "Job starten",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    460,
+    420
+   ],
+   "credentials": {
+    "httpHeaderAuth": {
+     "name": "Clip-Engine"
+    }
+   }
+  },
+  {
+   "parameters": {
+    "jsCode": "const q = $input.first().json.callback_query;\nconst parts = (q.data || '').split('|');\nif (parts[0] !== 'ce' || parts.length < 4) return [];\nreturn [{ json: { action: parts[1], job: parts[2], n: Number(parts[3]), cbid: q.id } }];"
+   },
+   "id": "df3a8413-ce3b-4388-88cd-15c656c6a7b4",
+   "name": "Button lesen",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    460,
+    180
+   ]
+  },
+  {
+   "parameters": {
+    "method": "POST",
+    "url": "=http://clip-engine:8000/jobs/{{ $json.job }}/clips/{{ $json.n }}/action",
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpHeaderAuth",
+    "options": {},
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({ action: $json.action, callback_query_id: $json.cbid }) }}"
+   },
+   "id": "59b6feda-0e6b-4c4c-8355-9729895f14ef",
+   "name": "Aktion an Engine",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    680,
+    180
+   ],
+   "credentials": {
+    "httpHeaderAuth": {
+     "name": "Clip-Engine"
+    }
+   }
+  },
+  {
+   "parameters": {
+    "conditions": {
+     "string": [
+      {
+       "value1": "={{ $json.next }}",
+       "value2": "youtube"
+      }
+     ]
+    }
+   },
+   "id": "19033de8-dad6-42e4-a5d8-1177671a67e9",
+   "name": "YouTube?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 1,
+   "position": [
+    900,
+    180
+   ]
+  },
+  {
+   "parameters": {
+    "method": "GET",
+    "url": "={{ $json.video_url }}",
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpHeaderAuth",
+    "options": {
+     "response": {
+      "response": {
+       "responseFormat": "file",
+       "outputPropertyName": "data"
+      }
+     }
+    }
+   },
+   "id": "50f5e9a0-0e02-472c-a8e7-c30f61aa1dd4",
+   "name": "Clip laden",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    1120,
+    100
+   ],
+   "credentials": {
+    "httpHeaderAuth": {
+     "name": "Clip-Engine"
+    }
+   }
+  },
+  {
+   "parameters": {
+    "resource": "video",
+    "operation": "upload",
+    "title": "={{ $('YouTube?').item.json.title }}",
+    "regionCode": "US",
+    "categoryId": "20",
+    "binaryProperty": "data",
+    "options": {
+     "description": "={{ $('YouTube?').item.json.description }}",
+     "privacyStatus": "private",
+     "publishAt": "={{ $('YouTube?').item.json.publish_at }}",
+     "tags": "={{ $('YouTube?').item.json.tags }}",
+     "defaultLanguage": "en",
+     "selfDeclaredMadeForKids": false,
+     "notifySubscribers": false
+    }
+   },
+   "id": "cadf5973-c310-40e0-a9a0-5a05407ab6b6",
+   "name": "YouTube hochladen",
+   "type": "n8n-nodes-base.youTube",
+   "typeVersion": 1,
+   "position": [
+    1340,
+    100
+   ],
+   "onError": "continueRegularOutput",
+   "credentials": {
+    "youTubeOAuth2Api": {
+     "name": "YouTube EN-Kanal"
+    }
+   }
+  },
+  {
+   "parameters": {
+    "method": "POST",
+    "url": "={{ 'http://clip-engine:8000/jobs/' + $('YouTube?').item.json.job_id + '/clips/' + $('YouTube?').item.json.n + '/published' }}",
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpHeaderAuth",
+    "options": {},
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify({ platform: 'youtube', video_id: $json.uploadId || $json.id || '', error: $json.error ? (typeof $json.error === 'string' ? $json.error : JSON.stringify($json.error)).slice(0, 500) : '' }) }}"
+   },
+   "id": "3b7039a3-800c-4088-8cd3-32cba0974dab",
+   "name": "Ergebnis melden",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    1560,
+    100
+   ],
+   "credentials": {
+    "httpHeaderAuth": {
+     "name": "Clip-Engine"
+    }
+   }
+  }
+ ],
+ "connections": {
+  "Clip-Bot": {
+   "main": [
+    [
+     {
+      "node": "Button geklickt?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Button geklickt?": {
+   "main": [
+    [
+     {
+      "node": "Button lesen",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Job starten",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Button lesen": {
+   "main": [
+    [
+     {
+      "node": "Aktion an Engine",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Aktion an Engine": {
+   "main": [
+    [
+     {
+      "node": "YouTube?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "YouTube?": {
+   "main": [
+    [
+     {
+      "node": "Clip laden",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    []
+   ]
+  },
+  "Clip laden": {
+   "main": [
+    [
+     {
+      "node": "YouTube hochladen",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "YouTube hochladen": {
+   "main": [
+    [
+     {
+      "node": "Ergebnis melden",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1"
+ },
+ "pinData": {}
+}
