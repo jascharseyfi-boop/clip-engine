@@ -12,7 +12,7 @@ if SETTINGS_FILE.exists():
     except (ValueError, OSError):
         pass
 
-SETUP_KEYS = ["ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "VIZARD_API_KEY",
+SETUP_KEYS = ["ANTHROPIC_API_KEY", "ANTHROPIC_WORKSPACE_ID", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "VIZARD_API_KEY",
               "VIZARD_TIKTOK_ACCOUNT_ID", "CLAUDE_MODEL", "SLOTS_YOUTUBE", "SLOTS_TIKTOK"]
 
 
@@ -37,6 +37,8 @@ PUBLIC_BASE_URL = _env("PUBLIC_BASE_URL", "").rstrip("/")  # z. B. https://clips
 # Claude
 ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = _env("CLAUDE_MODEL", "claude-sonnet-5-5")
+ANTHROPIC_WORKSPACE_ID = _env("ANTHROPIC_WORKSPACE_ID", "")   # nur für Keys ohne festen Workspace
+ANTHROPIC_VERSION = _env("ANTHROPIC_VERSION", "2023-06-01")
 MAX_SHEETS = _env("MAX_SHEETS", 10, int)           # Kontaktabzüge pro Video an Claude (je 12 Bilder)
 
 # Transkription

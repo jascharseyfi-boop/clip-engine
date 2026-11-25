@@ -18,6 +18,7 @@ _fails: list[float] = []
 
 FIELDS = [
     ("ANTHROPIC_API_KEY", "Anthropic API-Key", "sk-ant-…", True),
+    ("ANTHROPIC_WORKSPACE_ID", "Anthropic Workspace-ID (nur falls der Key keinem Workspace zugeordnet ist)", "wrkspc_… (meist leer lassen)", False),
     ("TELEGRAM_BOT_TOKEN", "Telegram-Bot-Token (neuer Clip-Bot von @BotFather)", "123456:ABC…", True),
     ("TELEGRAM_CHAT_ID", "Telegram-Chat-ID", "726174060", False),
     ("VIZARD_API_KEY", "Vizard API-Key (für TikTok)", "optional", True),
@@ -127,13 +128,16 @@ def setup_check(code: str):
     # Claude
     if config.ANTHROPIC_API_KEY:
         try:
-            r = httpx.post("https://api.anthropic.com/v1/messages", timeout=30, headers={
-                "x-api-key": config.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"},
-                json={"model": config.CLAUDE_MODEL, "max_tokens": 5, "messages": [{"role": "user", "content": "Hi"}]})
-            msg = f"{config.CLAUDE_MODEL}: OK" if r.status_code == 200 else (
-                f"HTTP {r.status_code} {r.text[:200]} – gespeichert: {_mask(config.ANTHROPIC_API_KEY)}. "
-                "Ein Key beginnt mit sk-ant-api03- und hat etwa 108 Zeichen.")
-            out.append(("Claude", r.status_code == 200, msg))
+            from .selector import claude_request
+            status, data = claude_request({"model": config.CLAUDE_MODEL, "max_tokens": 5,
+                                           "messages": [{"role": "user", "content": "Hi"}]}, timeout=30)
+            hint = ""
+            if "workspace" in str(data).lower():
+                hint = (" – Der Key ist keinem Workspace zugeordnet: entweder einen neuen Key mit Workspace „Default“ anlegen "
+                        "oder die Workspace-ID (Console → Settings → Workspaces, Spalte ID) im Setup eintragen.")
+            msg = f"{config.CLAUDE_MODEL}: OK" if status == 200 else (
+                f"HTTP {status} {str(data)[:220]} – gespeichert: {_mask(config.ANTHROPIC_API_KEY)}{hint}")
+            out.append(("Claude", status == 200, msg))
         except httpx.HTTPError as e:
             out.append(("Claude", False, str(e)))
     else:

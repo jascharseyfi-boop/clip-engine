@@ -83,22 +83,41 @@ def _parse_json(text: str) -> dict:
     return json.loads(text[start:end + 1])
 
 
+def claude_request(body: dict, timeout: float = 300) -> tuple[int, dict | str]:
+    """Ruft die Messages-API auf: zuerst Authorization: Bearer (neue Keys, z. B. sk-ant-usr…),
+    bei 401 noch einmal mit x-api-key (ältere sk-ant-api03-Keys)."""
+    import httpx
+    base = {"anthropic-version": config.ANTHROPIC_VERSION, "content-type": "application/json"}
+    if config.ANTHROPIC_WORKSPACE_ID:
+        base["anthropic-workspace-id"] = config.ANTHROPIC_WORKSPACE_ID
+    last = (0, "")
+    for auth in ({"authorization": f"Bearer {config.ANTHROPIC_API_KEY}"}, {"x-api-key": config.ANTHROPIC_API_KEY}):
+        r = httpx.post("https://api.anthropic.com/v1/messages", headers={**base, **auth}, json=body, timeout=timeout)
+        try:
+            data = r.json()
+        except ValueError:
+            data = r.text[:500]
+        last = (r.status_code, data)
+        if r.status_code != 401:
+            return last
+    return last
+
+
 def select(job: dict, an: dict, work: Path) -> dict:
-    import anthropic
     if not config.ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY fehlt in der .env")
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        raise RuntimeError("ANTHROPIC_API_KEY fehlt (Setup-Seite)")
     content = []
     for sh in an["sheets"]:
         data = base64.standard_b64encode((work / sh["file"]).read_bytes()).decode()
         content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}})
     content.append({"type": "text", "text": build_prompt(job, an)})
-    resp = client.messages.create(
-        model=config.CLAUDE_MODEL, max_tokens=6000, system=SYSTEM,
-        messages=[{"role": "user", "content": content}],
-    )
-    text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
+    status, resp = claude_request({"model": config.CLAUDE_MODEL, "max_tokens": 6000, "system": SYSTEM,
+                                   "messages": [{"role": "user", "content": content}]})
+    if status != 200:
+        raise RuntimeError(f"Claude-API HTTP {status}: {str(resp)[:400]}")
+    text = "".join(b.get("text", "") for b in resp.get("content", []) if b.get("type") == "text")
     (work / "claude_raw.txt").write_text(text)
     result = _parse_json(text)
-    result["usage"] = {"input_tokens": resp.usage.input_tokens, "output_tokens": resp.usage.output_tokens}
+    u = resp.get("usage", {})
+    result["usage"] = {"input_tokens": u.get("input_tokens", 0), "output_tokens": u.get("output_tokens", 0)}
     return result
