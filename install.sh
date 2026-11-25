@@ -32,15 +32,36 @@ CADDY_CT=$(docker ps --format '{{.Names}} {{.Image}}' | awk 'tolower($2) ~ /cadd
 [ -n "$N8N_CT" ] || die "Kein laufender n8n-Container gefunden."
 [ -n "$CADDY_CT" ] || die "Kein laufender Caddy-Container gefunden."
 NET=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$N8N_CT" | awk '{print $1}')
+CADDY_MODE=file
 CADDYFILE=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/etc/caddy/Caddyfile"}}{{.Source}}{{end}}{{end}}' "$CADDY_CT")
 if [ -z "$CADDYFILE" ]; then
   CDIR=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/etc/caddy"}}{{.Source}}{{end}}{{end}}' "$CADDY_CT")
   [ -n "$CDIR" ] && CADDYFILE="$CDIR/Caddyfile"
 fi
-[ -f "${CADDYFILE:-}" ] || CADDYFILE=$(find /opt/n8n -maxdepth 2 -name Caddyfile | head -1)
-[ -f "${CADDYFILE:-}" ] || die "Caddyfile nicht gefunden."
-N8N_HOST=$(grep -oE '^[[:space:]]*[a-zA-Z0-9.-]+\.[a-z]{2,}' "$CADDYFILE" | head -1 | tr -d '[:space:]')
-if [ -z "$N8N_HOST" ]; then
+if [ -f "${CADDYFILE:-}" ]; then
+  N8N_HOST=$(grep -oE '^[[:space:]]*[a-zA-Z0-9.-]+\.[a-z]{2,}' "$CADDYFILE" | head -1 | tr -d '[:space:]')
+else
+  # Caddy läuft ohne Caddyfile als "caddy reverse-proxy --from … --to …"
+  CMDLINE=$(docker inspect -f '{{join .Config.Entrypoint " "}} {{join .Config.Cmd " "}}' "$CADDY_CT")
+  echo "$CMDLINE" | grep -q "reverse-proxy" || die "Caddy-Konfiguration nicht erkannt: $CMDLINE"
+  CADDY_MODE=cmd
+  RP_FROM=$(echo "$CMDLINE" | grep -oE -- '--from[ =][^ ]+' | head -1 | sed -E 's/--from[ =]//; s#^https?://##; s#/.*$##')
+  RP_TO=$(echo "$CMDLINE" | grep -oE -- '--to[ =][^ ]+' | head -1 | sed -E 's/--to[ =]//')
+  [ -n "$RP_FROM" ] && [ -n "$RP_TO" ] || die "Konnte --from/--to aus dem Caddy-Befehl nicht lesen: $CMDLINE"
+  N8N_HOST="$RP_FROM"
+  C_WD=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$CADDY_CT")
+  C_SVC=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$CADDY_CT")
+  C_CFG=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$CADDY_CT" | cut -d, -f1)
+  C_IMG=$(docker inspect -f '{{.Config.Image}}' "$CADDY_CT")
+  [ -n "$C_WD" ] && [ -n "$C_SVC" ] && [ -f "$C_CFG" ] || die "Caddy wurde nicht mit Docker Compose gestartet."
+  CADDYFILE="$C_WD/Caddyfile"
+  case "$(basename "$C_CFG")" in
+    compose.yaml) C_OVR="$C_WD/compose.override.yaml";; compose.yml) C_OVR="$C_WD/compose.override.yml";;
+    docker-compose.yaml) C_OVR="$C_WD/docker-compose.override.yaml";; *) C_OVR="$C_WD/docker-compose.override.yml";;
+  esac
+  [ -f "$C_OVR" ] && die "$C_OVR existiert schon – bitte Claude fragen, bevor es überschrieben wird."
+fi
+if [ -z "${N8N_HOST:-}" ]; then
   IP=$(hostname -I | awk '{print $1}'); N8N_HOST="n8n.${IP//./-}.sslip.io"
 fi
 case "$N8N_HOST" in n8n.*) CLIP_HOST="clips.${N8N_HOST#n8n.}";; *) CLIP_HOST="clips.$N8N_HOST";; esac
@@ -57,11 +78,7 @@ setv PUBLIC_BASE_URL "https://$CLIP_HOST"
 setv N8N_NETWORK "$NET"
 chmod 600 .env
 
-say "Caddy: öffentliche Clip-Adresse einrichten"
-if ! grep -q "$CLIP_HOST" "$CADDYFILE"; then
-  cp "$CADDYFILE" "$CADDYFILE.bak.$(date +%s)"
-  cat >> "$CADDYFILE" <<EOF
-
+CLIP_BLOCK="
 # Clip-Engine: nur fertige Clips (für Vizard/TikTok) und die Setup-Seite sind öffentlich
 $CLIP_HOST {
 	@allowed path /public/* /setup /setup/*
@@ -69,24 +86,56 @@ $CLIP_HOST {
 		reverse_proxy clip-engine:8000
 	}
 	respond 404
-}
-EOF
-  echo "Block ergänzt."
-  if ! docker exec "$CADDY_CT" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
-    cp "$(ls -t "$CADDYFILE".bak.* | head -1)" "$CADDYFILE"
-    die "Caddy-Konfiguration ungültig – alte Version wiederhergestellt, n8n läuft unverändert weiter."
-  fi
-else
-  echo "Block schon vorhanden."
-fi
+}"
 
 say "Clip-Engine bauen und starten (dauert beim ersten Mal 3–6 Minuten)"
 docker compose up -d --build
 
-say "Caddy neu laden"
-sleep 3
-if ! docker exec "$CADDY_CT" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile 2>/dev/null; then
-  docker restart "$CADDY_CT" >/dev/null
+say "Caddy: öffentliche Clip-Adresse einrichten"
+if [ "$CADDY_MODE" = cmd ]; then
+  # Caddy von "reverse-proxy"-Befehl auf ein Caddyfile umstellen (gleiche n8n-Weiterleitung + Clip-Adresse)
+  cat > "$CADDYFILE" <<EOF
+$N8N_HOST {
+	reverse_proxy $RP_TO
+}
+$CLIP_BLOCK
+EOF
+  docker run --rm -v "$CADDYFILE:/etc/caddy/Caddyfile:ro" "$C_IMG" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 \
+    || { rm -f "$CADDYFILE"; die "Erzeugtes Caddyfile ungültig – nichts geändert, n8n läuft weiter."; }
+  cat > "$C_OVR" <<EOF
+# angelegt von clip-engine/install.sh: Caddy liest jetzt ./Caddyfile
+services:
+  $C_SVC:
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+EOF
+  (cd "$C_WD" && docker compose -f "$C_CFG" -f "$C_OVR" up -d "$C_SVC")
+  echo "Prüfe, ob n8n weiter erreichbar ist …"
+  N8N_OK=""
+  for i in $(seq 1 20); do
+    code=$(curl -sk -o /dev/null -w '%{http_code}' "https://$N8N_HOST/" || true)
+    case "$code" in 2*|3*|401) N8N_OK=1; break;; esac
+    sleep 3
+  done
+  if [ -z "$N8N_OK" ]; then
+    rm -f "$C_OVR"
+    (cd "$C_WD" && docker compose -f "$C_CFG" up -d "$C_SVC")
+    die "n8n war nach der Umstellung nicht erreichbar – alte Caddy-Einstellung wiederhergestellt."
+  fi
+  echo "Caddy umgestellt, n8n erreichbar."
+elif ! grep -q "$CLIP_HOST" "$CADDYFILE"; then
+  cp "$CADDYFILE" "$CADDYFILE.bak.$(date +%s)"
+  printf '%s\n' "$CLIP_BLOCK" >> "$CADDYFILE"
+  if ! docker exec "$CADDY_CT" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+    cp "$(ls -t "$CADDYFILE".bak.* | head -1)" "$CADDYFILE"
+    die "Caddy-Konfiguration ungültig – alte Version wiederhergestellt, n8n läuft unverändert weiter."
+  fi
+  docker exec "$CADDY_CT" caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 \
+    || docker restart "$CADDY_CT" >/dev/null
+  echo "Block ergänzt."
+else
+  echo "Block schon vorhanden."
 fi
 
 say "Warten, bis die Engine antwortet"
