@@ -89,7 +89,15 @@ def transcribe(wav: Path) -> dict:
         _whisper = WhisperModel(config.WHISPER_MODEL, device="cpu", compute_type="int8",
                                 cpu_threads=config.WHISPER_THREADS,
                                 download_root=str(config.DATA_DIR / "models"))
-    segments, info = _whisper.transcribe(str(wav), word_timestamps=True, vad_filter=True, beam_size=1)
+    # WAV selbst einlesen (16 kHz mono float32) statt über PyAV – neuere PyAV-Versionen brechen faster-whisper
+    import soundfile as sf
+    audio, sr = sf.read(str(wav), dtype="float32", always_2d=False)
+    if getattr(audio, "ndim", 1) > 1:
+        audio = audio.mean(axis=1)
+    if sr != 16000:
+        import librosa
+        audio = librosa.resample(audio, orig_sr=sr, target_sr=16000)
+    segments, info = _whisper.transcribe(audio, word_timestamps=True, vad_filter=True, beam_size=1)
     segs, words = [], []
     for s in segments:
         segs.append({"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()})

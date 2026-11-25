@@ -118,6 +118,17 @@ def telegram_message(m: TelegramIn):
         lines = [f"{j['id']} · {j['status']} · {html.escape(str(j.get('title'))[:50])}" for j in jobs] or ["keine Jobs"]
         telegram.send_message(m.chat_id, "\n".join(lines))
         return {"ok": True}
+    if text.lower().startswith(("/retry", "retry", "/nochmal")):
+        parts = text.split()
+        jid = parts[1] if len(parts) > 1 else next((j["id"] for j in store.list_jobs(20) if j["status"] == "failed"), None)
+        job = store.load(jid) if jid and jid.isalnum() else None
+        if not job:
+            telegram.send_message(m.chat_id, "Kein fehlgeschlagener Job gefunden.", m.message_id)
+            return {"ok": False}
+        store.update(jid, status="queued", error=None, clips=[])
+        pos = pipeline.enqueue(jid)
+        telegram.send_message(m.chat_id, f"🔁 Job <code>{jid}</code> läuft noch einmal (Platz {pos}).", m.message_id)
+        return {"ok": True, "job_id": jid}
     if not urls:
         telegram.send_message(m.chat_id, "Schick mir einen Video-Link. /hilfe zeigt die Optionen.", m.message_id)
         return {"ok": False}
@@ -156,7 +167,8 @@ HELP = ("<b>Clip-Engine</b>\nSchick einen Link (YouTube, Drive, Dropbox, MP4). O
         "• Zahl – Anzahl Clips (Standard 3)\n"
         "• <code>blur</code> / <code>crop</code> / <code>fit</code> – 9:16-Layout\n"
         "• <code>kampagne: Name</code>\n• <code>regeln: Pflicht-Hashtags, Erwähnungen …</code> (am Ende)\n"
-        "/status – letzte Jobs")
+        "/status – letzte Jobs\n/retry – letzten fehlgeschlagenen Job wiederholen\n"
+        "Videos ohne Link (Frame.io, Dateien-App): clips.…/setup/upload")
 
 
 @app.get("/jobs", dependencies=[Depends(auth)])
