@@ -182,3 +182,56 @@ def setup_vizard(code: str):
     return (f"<!doctype html>{CSS}<h2>Vizard-Konten</h2>{rows or '<p>Keine verbundenen Konten. In Vizard unter Social Accounts TikTok verbinden.</p>'}"
             f"<p><small>Die TikTok-ID oben ins Feld „Vizard TikTok-Account-ID“ eintragen.</small></p><a class=b href=/setup>Zurück</a>"
             f"<details><summary>Rohdaten</summary><pre>{html.escape(json.dumps(data, indent=1)[:3000])}</pre></details>")
+
+
+# ---------------------------------------------------------------- Upload vom iPad (Frame.io, Dateien-App …)
+@router.get("/setup/upload", response_class=HTMLResponse)
+def upload_form(msg: str = ""):
+    return f"""<!doctype html>{CSS}<h2>Clip-Engine · Video hochladen</h2>{msg}
+<p><small>Für Videos aus Frame.io, AirDrop oder der Dateien-App. Die Clips kommen wie gewohnt in Telegram.</small></p>
+<form method=post action=/setup/upload enctype=multipart/form-data onsubmit="document.getElementById('b').innerText='Lädt hoch … Seite offen lassen'">
+<label>Setup-Code</label><input name=code autocomplete=off autocapitalize=characters required>
+<label>Video</label><input type=file name=file accept="video/*" required>
+<label>Sprache</label><select name=lang style="width:100%;padding:10px;font-size:16px"><option value=en>Englisch (YouTube)</option><option value=de>Deutsch (TikTok)</option></select>
+<label>Anzahl Clips</label><input name=n_clips type=number value=3 min=1 max=10>
+<label>Layout</label><select name=layout style="width:100%;padding:10px;font-size:16px"><option>blur</option><option>crop</option><option>fit</option></select>
+<label>Kampagne</label><input name=campaign placeholder="SEGA Metaphor ReFantazio" autocorrect=off>
+<label>Regeln aus dem Briefing</label><input name=rules placeholder="#MetaphorReFantazio @SEGA" autocorrect=off autocapitalize=off>
+<button id=b>Hochladen &amp; Clips erstellen</button></form>"""
+
+
+@router.post("/setup/upload", response_class=HTMLResponse)
+async def upload_save(request: Request):
+    import time as _t
+    from . import pipeline, store
+    from .main import _params
+    form = await request.form()
+    err = _check(str(form.get("code", "")))
+    if err:
+        return upload_form(msg=f"<p class=err>{err}</p>")
+    f = form.get("file")
+    if not f or not getattr(f, "filename", ""):
+        return upload_form(msg="<p class=err>Keine Datei gewählt.</p>")
+    params = _params({"url": f"upload:{f.filename}", "lang": form.get("lang"), "n_clips": form.get("n_clips") or 3,
+                      "campaign": form.get("campaign") or "", "rules": form.get("rules") or "",
+                      "layout": form.get("layout") or ""})
+    job_id = store.new_job_id()
+    d = store.job_dir(job_id)
+    d.mkdir(parents=True)
+    ext = (f.filename.rsplit(".", 1)[-1] if "." in f.filename else "mp4").lower()
+    ext = ext if ext in ("mp4", "mov", "mkv", "webm", "m4v") else "mp4"
+    if ext == "m4v":
+        ext = "mp4"
+    with open(d / f"source.{ext}", "wb") as out:
+        while chunk := await f.read(1 << 20):
+            out.write(chunk)
+    size = (d / f"source.{ext}").stat().st_size / 1e6
+    store.save({"id": job_id, "status": "queued", "created": _t.time(), "params": params, "title": f.filename})
+    pos = pipeline.enqueue(job_id)
+    from . import telegram
+    if telegram.enabled() and params["chat_id"]:
+        telegram.send_message(params["chat_id"], f"⏳ Upload <code>{job_id}</code> angenommen: {html.escape(f.filename)} "
+                                                 f"({size:.0f} MB), {params['n_clips']} Clips · {params['lang'].upper()}")
+    return (f"<!doctype html>{CSS}<h2 class=ok>Hochgeladen ✓</h2><p>{html.escape(f.filename)} · {size:.0f} MB · "
+            f"Job <code>{job_id}</code> (Platz {pos})</p><p>Die Clips kommen in ein paar Minuten in Telegram.</p>"
+            f"<a class=b href=/setup/upload>Noch ein Video</a>")
