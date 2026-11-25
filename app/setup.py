@@ -263,3 +263,55 @@ async def upload_save(request: Request):
     return _with_cookie(HTMLResponse(f"<!doctype html>{CSS}<h2 class=ok>Hochgeladen ✓</h2><p>{html.escape(f.filename)} · {size:.0f} MB · "
             f"Job <code>{job_id}</code> (Platz {pos})</p><p>Die Clips kommen in ein paar Minuten in Telegram.</p>"
             f"<a class=b href=/setup/upload>Noch ein Video</a>"))
+
+
+@router.post("/setup/upload-raw")
+async def upload_raw(request: Request):
+    """Für iOS-Kurzbefehle: Video als kompletter Anfragetext („Anfragetext: Datei“),
+    Angaben als Header: X-Code, X-Lang, X-Clips, X-Layout, X-Campaign, X-Rules, X-Filename."""
+    import time as _t
+    from urllib.parse import unquote
+    from fastapi.responses import PlainTextResponse
+    from . import pipeline, store, telegram
+    from .main import _params
+    h = request.headers
+    err = _auth(request, h.get("x-code", ""))
+    if err:
+        return PlainTextResponse("Fehler: " + err, status_code=401)
+
+    def hv(name, default=""):
+        v = h.get(name, default) or default
+        try:
+            return unquote(v.encode("latin-1").decode("utf-8"))  # Umlaute aus iOS-Headern retten
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            return unquote(v)
+
+    name = hv("x-filename", "") or "kurzbefehl.mp4"
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else "mp4"
+    ext = {"m4v": "mp4", "qt": "mov"}.get(ext, ext)
+    if ext not in ("mp4", "mov", "mkv", "webm"):
+        ext = "mp4"
+    params = _params({"url": f"upload:{name}", "lang": hv("x-lang", "en").strip().lower() or "en",
+                      "n_clips": hv("x-clips", "3") or 3, "layout": hv("x-layout", ""),
+                      "campaign": hv("x-campaign", ""), "rules": hv("x-rules", "")})
+    job_id = store.new_job_id()
+    d = store.job_dir(job_id)
+    d.mkdir(parents=True)
+    path = d / f"source.{ext}"
+    size = 0
+    with open(path, "wb") as out:
+        async for chunk in request.stream():
+            out.write(chunk)
+            size += len(chunk)
+    if size < 50_000:
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+        return PlainTextResponse("Fehler: kein Video angekommen (Anfragetext muss „Datei“ mit der Kurzbefehlseingabe sein).",
+                                 status_code=400)
+    store.save({"id": job_id, "status": "queued", "created": _t.time(), "params": params, "title": name})
+    pos = pipeline.enqueue(job_id)
+    if telegram.enabled() and params["chat_id"]:
+        telegram.send_message(params["chat_id"], f"⏳ Upload <code>{job_id}</code> angenommen: {html.escape(name)} "
+                                                 f"({size / 1e6:.0f} MB), {params['n_clips']} Clips · {params['lang'].upper()}"
+                                                 + (f"\nKampagne: {html.escape(params['campaign'])}" if params['campaign'] else ""))
+    return PlainTextResponse(f"Hochgeladen ✓ {size / 1e6:.0f} MB · Job {job_id} · Clips kommen in Telegram")
