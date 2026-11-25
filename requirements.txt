@@ -8,3 +8,4 @@ soundfile==0.14.0
 numpy==2.5.3
 pillow==12.3.0
 yt-dlp[default]
+gdown==6.5.2
