@@ -10,7 +10,7 @@ Telegram-Link ─▶ n8n ─▶ Clip-Engine ─┬─ ffmpeg: Szenenwechsel
                                      ├─ Regeln: stärkstes Bild zuerst, Ende auf Schnitt/Beat, 18–45 s
                                      └─ Render: 9:16, Hook-Text, Wort-Untertitel, Logo
             Telegram ◀── Clip + Buttons [▶️ YouTube EN] [🎵 TikTok DE] [❌]
-   Klick ─▶ n8n ─▶ Engine bucht Slot ─▶ YouTube-Upload (n8n, privat + publishAt) / Vizard publish-video (TikTok)
+   Klick ─▶ n8n ─▶ Engine bucht Slot ─▶ YouTube: Titel/Beschreibung/Uhrzeit zum Kopieren (Upload in YouTube Studio) / TikTok: Vizard publish-video
 ```
 
 ## Installation (Hetzner-Web-Konsole, als root)
@@ -39,7 +39,7 @@ Danach alles Weitere auf dem iPad im Browser:
 Credentials zuordnen:
 - **Clip-Bot** → neues Telegram-Credential mit dem Token des Clip-Bots
 - alle HTTP-Knoten → „Clip-Engine“ (Header Auth)
-- **YouTube hochladen** → YouTube-OAuth2-Credential für den englischen Kanal (Google-Cloud-Projekt mit „YouTube Data API v3“, Redirect-URL aus n8n)
+- **YouTube hochladen** bleibt deaktiviert: Uploads über ein eigenes, nicht geprüftes Google-API-Projekt bleiben von YouTube auf „privat“ gesperrt. Stattdessen schickt der Bot Titel, Beschreibung und Uhrzeit zum Kopieren.
 
 Workflow aktivieren.
 

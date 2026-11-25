@@ -237,24 +237,32 @@ def clip_action(job_id: str, n: int, a: ActionIn):
         return {"next": "none"}
 
     if a.action == "yt":
-        if c.get("youtube", {}).get("status") in ("pending", "scheduled"):
-            telegram.answer_callback(a.callback_query_id, "Läuft schon / ist schon geplant")
+        yt = c.get("youtube", {})
+        if yt.get("status") in ("pending", "scheduled", "manual"):
+            telegram.answer_callback(a.callback_query_id, "Für YouTube schon vorbereitet")
             return {"next": "none"}
         when = schedule.book("youtube", ref)
         tags = [t.lstrip("#") for t in (c.get("hashtags") or [])]
         desc = (c.get("description", "") + "\n\n" + " ".join(c.get("hashtags") or []) + " #Shorts").strip()
-        store.update_clip(job_id, n, youtube={"status": "pending", "publish_at": when.isoformat()})
-        telegram.answer_callback(a.callback_query_id, f"YouTube-Upload startet, geplant {_fmt_local(when)}")
-        return {
-            "next": "youtube",
-            "title": (c.get("title") or "Clip")[:95],
-            "description": desc[:4800],
-            "tags": ",".join(tags + ["Shorts"])[:450],
-            "publish_at": when.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "publish_at_local": _fmt_local(when),
-            "video_url": f"http://clip-engine:8000/jobs/{job_id}/clips/{n}/video",
-            "job_id": job_id, "n": n,
-        }
+        title = (c.get("title") or "Clip")[:95]
+        store.update_clip(job_id, n, youtube={"status": "manual", "publish_at": when.isoformat()})
+        telegram.answer_callback(a.callback_query_id, f"YouTube: {_fmt_local(when)}")
+        ny = when.astimezone(ZoneInfo("America/New_York")).strftime("%H:%M")
+        e = html.escape
+        telegram.send_message(chat, (
+            f"▶️ <b>YouTube-Upload Clip #{n + 1}</b>\n"
+            f"Planen für <b>{_fmt_local(when)}</b> (New York {ny})\n\n"
+            f"<b>Titel</b> (antippen = kopieren)\n<code>{e(title)}</code>\n\n"
+            f"<b>Beschreibung</b>\n<pre>{e(desc[:3000])}</pre>\n"
+            f"<b>Tags</b>\n<code>{e(', '.join(tags + ['Shorts']))}</code>\n\n"
+            "1. Clip oben antippen → ⋯ → In Fotos sichern\n"
+            "2. YouTube Studio → ➕ → Short hochladen → Kanal EN\n"
+            "3. Titel/Beschreibung einfügen → Sichtbarkeit: Planen → Uhrzeit oben"), msg)
+        telegram.mark_message(chat, msg, f"▶️ YouTube {_fmt_local(when)}", keep_buttons={"inline_keyboard": [
+            [{"text": f"▶️ YouTube {_fmt_local(when)}", "callback_data": "ce|noop"},
+             {"text": "🎵 TikTok DE", "callback_data": f"ce|tt|{job_id}|{n}"}],
+            [{"text": "❌ Verwerfen", "callback_data": f"ce|no|{job_id}|{n}"}]]})
+        return {"next": "none", "publish_at": when.strftime("%Y-%m-%dT%H:%M:%SZ")}
 
     if a.action == "tt":
         if c.get("tiktok", {}).get("status") == "scheduled":
