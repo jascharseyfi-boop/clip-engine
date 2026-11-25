@@ -35,6 +35,34 @@ small{color:#666}button,a.b{display:inline-block;margin-top:18px;padding:12px 18
 code{background:#f2f2f2;padding:2px 6px;border-radius:4px;word-break:break-all}.ok{color:#0a7d2c}.err{color:#b00020}</style>"""
 
 
+COOKIE = "ce_auth"
+
+
+def _token() -> str:
+    return hmac.new(config.SETUP_CODE.upper().encode(), b"clip-engine-auth", "sha256").hexdigest()
+
+
+def _authed(request: Request | None) -> bool:
+    return bool(request and config.SETUP_CODE and hmac.compare_digest(request.cookies.get(COOKIE, ""), _token()))
+
+
+def _auth(request: Request | None, code: str) -> str | None:
+    """Angemeldet per Cookie oder per Setup-Code."""
+    return None if _authed(request) else _check(code)
+
+
+def _code_field(request: Request | None) -> str:
+    if _authed(request):
+        return "<p><small class=ok>✓ angemeldet</small></p>"
+    return ("<label>Setup-Code</label><input name=code autocomplete=off autocapitalize=characters required>"
+            "<p><small>Nur beim ersten Mal – danach merkt sich Safari die Anmeldung 180 Tage.</small></p>")
+
+
+def _with_cookie(resp: HTMLResponse) -> HTMLResponse:
+    resp.set_cookie(COOKIE, _token(), max_age=180 * 86400, httponly=True, secure=True, samesite="lax")
+    return resp
+
+
 def _check(code: str) -> str | None:
     now = time.time()
     _fails[:] = [t for t in _fails if now - t < 600]
@@ -74,7 +102,7 @@ def _current() -> dict:
 
 
 @router.get("/setup", response_class=HTMLResponse)
-def setup_form(msg: str = ""):
+def setup_form(request: Request = None, msg: str = ""):
     cur = _current()
     rows = []
     for key, label, ph, secret in FIELDS:
@@ -84,7 +112,7 @@ def setup_form(msg: str = ""):
         rows.append(f"<label>{label}</label><input name={key} placeholder='{html.escape(ph)}' value='{value}' "
                     f"autocomplete=off autocapitalize=off autocorrect=off spellcheck=false>{hint}")
     return f"""<!doctype html>{CSS}<h2>Clip-Engine · Setup</h2>{msg}
-<form method=post action=/setup><label>Setup-Code</label><input name=code autocomplete=off autocapitalize=characters required>
+<form method=post action=/setup>{_code_field(request)}
 {''.join(rows)}<button>Speichern &amp; neu starten</button></form>"""
 
 
@@ -98,9 +126,9 @@ def _restart_soon():
 @router.post("/setup", response_class=HTMLResponse)
 async def setup_save(request: Request):
     form = await request.form()
-    err = _check(str(form.get("code", "")))
+    err = _auth(request, str(form.get("code", "")))
     if err:
-        return setup_form(msg=f"<p class=err>{err}</p>")
+        return setup_form(request, msg=f"<p class=err>{err}</p>")
     cur = _current()
     for key, *_ in FIELDS:
         v = _clean(key, str(form.get(key, "")))
@@ -108,20 +136,20 @@ async def setup_save(request: Request):
             cur[key] = v
     config.SETTINGS_FILE.write_text(json.dumps(cur, indent=1))
     os.chmod(config.SETTINGS_FILE, 0o600)
-    code = html.escape(str(form.get("code")).strip())
     _restart_soon()
-    return f"""<!doctype html>{CSS}<h2 class=ok>Gespeichert ✓</h2>
+    return _with_cookie(HTMLResponse(f"""<!doctype html>{CSS}<h2 class=ok>Gespeichert ✓</h2>
 <p>Die Engine startet neu (ca. 5 Sekunden).</p>
 <p><b>API-Key für n8n</b> – in n8n als Credential „Header Auth“ mit Name <code>X-API-Key</code> anlegen:</p>
 <p><code>{html.escape(config.API_KEY)}</code></p>
-<a class=b href="/setup/check?code={code}">Verbindungen prüfen</a>
-<a class=b href="/setup/vizard?code={code}">Vizard-Konten anzeigen</a>
-<a class=b href="/setup">Zurück</a>"""
+<a class=b href="/setup/check">Verbindungen prüfen</a>
+<a class=b href="/setup/vizard">Vizard-Konten anzeigen</a>
+<a class=b href="/setup/upload">Video hochladen</a>
+<a class=b href="/setup">Zurück</a>"""))
 
 
 @router.get("/setup/check", response_class=HTMLResponse)
-def setup_check(code: str):
-    err = _check(code)
+def setup_check(request: Request, code: str = ""):
+    err = _auth(request, code)
     if err:
         return f"{CSS}<p class=err>{err}</p>"
     out = []
@@ -165,8 +193,8 @@ def setup_check(code: str):
 
 
 @router.get("/setup/vizard", response_class=HTMLResponse)
-def setup_vizard(code: str):
-    err = _check(code)
+def setup_vizard(request: Request, code: str = ""):
+    err = _auth(request, code)
     if err:
         return f"{CSS}<p class=err>{err}</p>"
     if not config.VIZARD_API_KEY:
@@ -186,11 +214,11 @@ def setup_vizard(code: str):
 
 # ---------------------------------------------------------------- Upload vom iPad (Frame.io, Dateien-App …)
 @router.get("/setup/upload", response_class=HTMLResponse)
-def upload_form(msg: str = ""):
+def upload_form(request: Request = None, msg: str = ""):
     return f"""<!doctype html>{CSS}<h2>Clip-Engine · Video hochladen</h2>{msg}
 <p><small>Für Videos aus Frame.io, AirDrop oder der Dateien-App. Die Clips kommen wie gewohnt in Telegram.</small></p>
 <form method=post action=/setup/upload enctype=multipart/form-data onsubmit="document.getElementById('b').innerText='Lädt hoch … Seite offen lassen'">
-<label>Setup-Code</label><input name=code autocomplete=off autocapitalize=characters required>
+{_code_field(request)}
 <label>Video</label><input type=file name=file accept="video/*" required>
 <label>Sprache</label><select name=lang style="width:100%;padding:10px;font-size:16px"><option value=en>Englisch (YouTube)</option><option value=de>Deutsch (TikTok)</option></select>
 <label>Anzahl Clips</label><input name=n_clips type=number value=3 min=1 max=10>
@@ -206,12 +234,12 @@ async def upload_save(request: Request):
     from . import pipeline, store
     from .main import _params
     form = await request.form()
-    err = _check(str(form.get("code", "")))
+    err = _auth(request, str(form.get("code", "")))
     if err:
-        return upload_form(msg=f"<p class=err>{err}</p>")
+        return upload_form(request, msg=f"<p class=err>{err}</p>")
     f = form.get("file")
     if not f or not getattr(f, "filename", ""):
-        return upload_form(msg="<p class=err>Keine Datei gewählt.</p>")
+        return _with_cookie(HTMLResponse(upload_form(request, msg="<p class=err>Keine Datei gewählt.</p>")))
     params = _params({"url": f"upload:{f.filename}", "lang": form.get("lang"), "n_clips": form.get("n_clips") or 3,
                       "campaign": form.get("campaign") or "", "rules": form.get("rules") or "",
                       "layout": form.get("layout") or ""})
@@ -232,6 +260,6 @@ async def upload_save(request: Request):
     if telegram.enabled() and params["chat_id"]:
         telegram.send_message(params["chat_id"], f"⏳ Upload <code>{job_id}</code> angenommen: {html.escape(f.filename)} "
                                                  f"({size:.0f} MB), {params['n_clips']} Clips · {params['lang'].upper()}")
-    return (f"<!doctype html>{CSS}<h2 class=ok>Hochgeladen ✓</h2><p>{html.escape(f.filename)} · {size:.0f} MB · "
+    return _with_cookie(HTMLResponse(f"<!doctype html>{CSS}<h2 class=ok>Hochgeladen ✓</h2><p>{html.escape(f.filename)} · {size:.0f} MB · "
             f"Job <code>{job_id}</code> (Platz {pos})</p><p>Die Clips kommen in ein paar Minuten in Telegram.</p>"
-            f"<a class=b href=/setup/upload>Noch ein Video</a>")
+            f"<a class=b href=/setup/upload>Noch ein Video</a>"))
