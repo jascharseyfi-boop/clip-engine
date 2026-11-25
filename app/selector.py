@@ -18,6 +18,13 @@ the footage does not deliver.
 - Prefer clips that start on, or are opened by, the single strongest image.
 - A clip should end on a natural cut or musical accent, never mid-sentence.
 - Clips must not overlap by more than a few seconds.
+- The first 2 seconds decide everything. The clip body must START on movement, a character close-up, \
+a reveal or a musical hit — never on a logo, rating card, black frame, slow fade-in or establishing shot. \
+If the strongest moment comes later, start the body later.
+- Hooks create a curiosity gap the clip then pays off: a question, a bold claim or "wait for…" — \
+specific to what is on screen (e.g. "This boss is 50 stories tall"), never generic ("You won't believe this").
+- The end text re-states the topic so the viewer leaves with the game name and a reason to comment, \
+e.g. "Metaphor: ReFantazio — would you play it?" (max 8 words).
 - Respond with JSON only, no prose before or after."""
 
 
@@ -64,13 +71,14 @@ Tasks:
 1. Score the visual strength of each scene you can see (1-10).
 2. Choose the {p['n_clips']} best clips. For each give start/end in seconds (snap to scene boundaries), \
 the hero scene (the single most striking image in or near that clip, used as the 1-second opener), \
-a hook (max 7 words, {lang_name}, shown on screen in the first seconds), a title (max 70 chars, {lang_name}), \
+a hook (max 7 words, {lang_name}, shown on screen in the first seconds), an end_text (max 8 words, {lang_name}, \
+shown in the last 2.5 seconds: game name + question or call to comment), a title (max 70 chars, {lang_name}), \
 a description (1-2 sentences, {lang_name}, include required campaign hashtags/mentions if the rules name any), \
 3-6 hashtags, and a short reason.
 
 Return exactly this JSON:
 {{"scene_scores": [{{"id": 0, "score": 7, "note": "short"}}],
-  "clips": [{{"start": 12.4, "end": 41.0, "hero_scene": 9, "hook": "...", "title": "...",
+  "clips": [{{"start": 12.4, "end": 41.0, "hero_scene": 9, "hook": "...", "end_text": "...", "title": "...",
              "description": "...", "hashtags": ["#..."], "reason": "...", "score": 8}}]}}"""
 
 

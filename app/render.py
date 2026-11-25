@@ -100,15 +100,26 @@ def _esc(txt: str) -> str:
 
 
 def _map_words(words: list[dict], segments: list[dict]) -> list[dict]:
+    """Wortzeiten auf die Clip-Zeitachse umrechnen. Im Hero-Opener keine Untertitel
+    (der Ausschnitt kommt im Clip oft noch einmal vor → sonst doppelte Untertitel)."""
     out, offset = [], 0.0
     for seg in segments:
-        for w in words:
-            if w["start"] >= seg["start"] - 0.05 and w["end"] <= seg["end"] + 0.15:
-                out.append({"word": w["word"],
-                            "start": offset + max(0.0, w["start"] - seg["start"]),
-                            "end": offset + min(seg["end"], w["end"]) - seg["start"]})
+        if seg.get("kind") != "hero":
+            for w in words:
+                if w["start"] >= seg["start"] - 0.05 and w["end"] <= seg["end"] + 0.15:
+                    out.append({"word": w["word"],
+                                "start": offset + max(0.0, w["start"] - seg["start"]),
+                                "end": offset + min(seg["end"], w["end"]) - seg["start"]})
         offset += seg["end"] - seg["start"]
-    return out
+    # Whisper-Wiederholungen (gleiches Wort direkt hintereinander) entfernen
+    clean = []
+    for w in out:
+        if clean and w["word"].lower().strip(".,!?") == clean[-1]["word"].lower().strip(".,!?") \
+                and w["start"] - clean[-1]["end"] < 0.3:
+            clean[-1]["end"] = max(clean[-1]["end"], w["end"])
+            continue
+        clean.append(w)
+    return clean
 
 
 def _group(words: list[dict], max_words=3, max_span=1.4, max_gap=0.6) -> list[list[dict]]:
@@ -124,8 +135,12 @@ def _group(words: list[dict], max_words=3, max_span=1.4, max_gap=0.6) -> list[li
     return groups
 
 
-def build_ass(path: Path, hook: str, words: list[dict], total: float) -> Path:
-    hook_end = total if config.HOOK_SECONDS <= 0 else min(total, config.HOOK_SECONDS)
+def build_ass(path: Path, hook: str, words: list[dict], total: float, end_text: str = "",
+              hero_dur: float = 0.0) -> Path:
+    # Hook bleibt mindestens bis 2,5 s nach dem Opener stehen
+    hook_end = total if config.HOOK_SECONDS <= 0 else min(total, max(config.HOOK_SECONDS, hero_dur + 2.5))
+    end_dur = config.END_TEXT_SECONDS if end_text else 0
+    end_start = max(hook_end + 0.5, total - end_dur) if end_dur else total
     lines = [
         "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}",
         "WrapStyle: 0", "ScaledBorderAndShadow: yes", "",
@@ -133,19 +148,29 @@ def build_ass(path: Path, hook: str, words: list[dict], total: float) -> Path:
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
         "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Hook,Anton,124,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,1,0,1,7,2,8,70,70,330,1",
+        "Style: Hook,Anton,132,&H00FFFFFF,&H00FFFFFF,&H00000000,&H78000000,0,0,0,0,100,100,1,0,1,8,3,8,60,60,300,1",
         "Style: Sub,Archivo Black,66,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,6,2,2,80,80,520,1",
+        "Style: End,Anton,104,&H00FFFFFF,&H00FFFFFF,&H00000000,&H78000000,0,0,0,0,100,100,1,0,1,7,3,8,70,70,330,1",
         "", "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
     ]
     if hook:
-        lines.append(f"Dialogue: 1,{_ass_time(0)},{_ass_time(hook_end)},Hook,,0,0,0,,"
-                     f"{{\\fad(120,200)}}{_esc(hook.upper())}")
-    for g in _group(words):
+        # "Pop": klein → 108 % → 100 %, erstes Wort gelb, ab Frame 0 sichtbar
+        hw = _esc(hook.upper()).split(" ", 1)
+        txt = "{\\c&H00E6FF&}" + hw[0] + "{\\c&HFFFFFF&}" + (" " + hw[1] if len(hw) > 1 else "")
+        anim = "{\\fad(0,200)\\fscx70\\fscy70\\t(0,120,\\fscx108\\fscy108)\\t(120,220,\\fscx100\\fscy100)}"
+        lines.append(f"Dialogue: 1,{_ass_time(0)},{_ass_time(hook_end)},Hook,,0,0,0,,{anim}{txt}")
+    if end_text and end_start < total - 0.5:
+        anim = "{\\fad(150,0)\\fscx85\\fscy85\\t(0,180,\\fscx100\\fscy100)}"
+        lines.append(f"Dialogue: 1,{_ass_time(end_start)},{_ass_time(total)},End,,0,0,0,,{anim}{_esc(end_text.upper())}")
+    groups = _group(words)
+    for gi, g in enumerate(groups):
         g_end = g[-1]["end"] + 0.08
+        if gi + 1 < len(groups):                       # nie zwei Gruppen gleichzeitig (sonst gestapelt/doppelt)
+            g_end = min(g_end, groups[gi + 1][0]["start"])
         for i, w in enumerate(g):
             s = w["start"]
-            e = g[i + 1]["start"] if i + 1 < len(g) else g_end
+            e = min(g[i + 1]["start"], g_end) if i + 1 < len(g) else g_end
             if e - s < 0.04:
                 continue
             parts = []
@@ -172,7 +197,8 @@ def _layout_filter(layout: str) -> str:
             f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[v1]")
 
 
-def render(src: Path, plan: dict, ass: Path, out: Path, layout: str, has_audio: bool, crf: int | None = None) -> Path:
+def render(src: Path, plan: dict, ass: Path, out: Path, layout: str, has_audio: bool, crf: int | None = None,
+           src_w: int = 1920, src_h: int = 1080) -> Path:
     segs = plan["segments"]
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
     for s in segs:
@@ -191,8 +217,18 @@ def render(src: Path, plan: dict, ass: Path, out: Path, layout: str, has_audio: 
     for i, s in enumerate(segs):
         d = s["end"] - s["start"]
         a_in = f"{i}:a" if has_audio else f"{n + i}:a"
-        parts.append(f"[{i}:v]setpts=PTS-STARTPTS,fps=30,format=yuv420p,scale=iw:ih,setsar=1[v{i}]")
-        parts.append(f"[{a_in}]asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo,"
+        vf = f"[{i}:v]setpts=PTS-STARTPTS,fps=30,format=yuv420p,setsar=1"
+        vol = ""
+        if s.get("kind") == "hero" and config.HERO_ZOOM > 0:
+            # langsamer Zoom-in (Punch) über den Opener, Startbild sofort scharf
+            sw, sh = src_w // 2 * 2, src_h // 2 * 2
+            zmax = 1 + config.HERO_ZOOM
+            step = config.HERO_ZOOM / max(1, int(d * 30))
+            vf += (f",scale={sw}:{sh},zoompan=z='min(1+{step:.5f}*on,{zmax:.3f})':d=1:"
+                   f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s={sw}x{sh}:fps=30")
+            vol = f",volume={config.HERO_VOLUME}"
+        parts.append(vf + f"[v{i}]")
+        parts.append(f"[{a_in}]asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo{vol},"
                      f"afade=t=in:d=0.03,afade=t=out:st={max(0, d - 0.06):.3f}:d=0.06[a{i}]")
     concat_in = "".join(f"[v{i}][a{i}]" for i in range(n))
     parts.append(f"{concat_in}concat=n={n}:v=1:a=1[vc][ac]")
@@ -216,5 +252,5 @@ def render(src: Path, plan: dict, ass: Path, out: Path, layout: str, has_audio: 
         raise RuntimeError("Rendern fehlgeschlagen: " + proc.stderr[-1200:])
     # Telegram-Bots dürfen max. 50 MB senden
     if out.stat().st_size > 48 * 1024 * 1024 and (crf or config.CRF) < 30:
-        return render(src, plan, ass, out, layout, has_audio, crf=(crf or config.CRF) + 4)
+        return render(src, plan, ass, out, layout, has_audio, crf=(crf or config.CRF) + 4, src_w=src_w, src_h=src_h)
     return out

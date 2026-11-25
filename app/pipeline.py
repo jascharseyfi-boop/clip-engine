@@ -56,7 +56,7 @@ def _caption(i: int, c: dict) -> str:
     body = c["plan"]["segments"][-1]
     lines = [
         f"<b>#{i + 1} · {e(c.get('title', ''))}</b>",
-        f"Hook: <i>{e(c.get('hook', ''))}</i>",
+        f"Hook: <i>{e(c.get('hook', ''))}</i>" + (f" · Ende: <i>{e(c.get('end_text', ''))}</i>" if c.get("end_text") else ""),
         f"⏱ {c['plan']['duration']:.0f}s · Quelle {body['start']:.1f}–{body['end']:.1f}s · Ende: {c['plan']['end_reason']}"
         + (f" · Opener S{c['plan']['hero_scene']}" if c['plan'].get('hero_scene') is not None else ""),
         f"Score {c.get('score', '?')}/10 – {e(c.get('reason', ''))}",
@@ -131,9 +131,13 @@ def process(job_id: str) -> None:
         for i, c in enumerate(clips):
             _log(job_id, f"rendere Clip {i + 1}/{len(clips)}")
             words = render._map_words(transcript.get("words", []), c["plan"]["segments"])
-            ass = render.build_ass(work / f"clip_{i:02d}.ass", c.get("hook", ""), words, c["plan"]["duration"])
+            hero_dur = sum(sg["end"] - sg["start"] for sg in c["plan"]["segments"] if sg.get("kind") == "hero")
+            end_text = c.get("end_text", "") if config.END_TEXT_SECONDS > 0 else ""
+            ass = render.build_ass(work / f"clip_{i:02d}.ass", c.get("hook", ""), words, c["plan"]["duration"],
+                                   end_text=end_text, hero_dur=hero_dur)
             out = work / f"clip_{i:02d}.mp4"
-            render.render(src, c["plan"], ass, out, p["layout"], info["has_audio"])
+            render.render(src, c["plan"], ass, out, p["layout"], info["has_audio"],
+                          src_w=info["width"], src_h=info["height"])
             c.update({"n": i, "file": out.name, "public_token": secrets.token_urlsafe(18).replace("-", "").replace("_", ""),
                       "size_mb": round(out.stat().st_size / 1e6, 1), "status": "review"})
             out_clips.append(c)

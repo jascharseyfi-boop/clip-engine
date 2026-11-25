@@ -51,6 +51,9 @@ MIN_LEN = _env("CLIP_MIN_LEN", 18, float)
 MAX_LEN = _env("CLIP_MAX_LEN", 45, float)
 HERO_SECONDS = _env("HERO_SECONDS", 1.2, float)    # Länge des vorangestellten stärksten Bildes; 0 = aus
 HOOK_SECONDS = _env("HOOK_SECONDS", 3.5, float)    # wie lange der Hook-Text steht; 0 = ganzer Clip
+HERO_ZOOM = _env("HERO_ZOOM", 0.12, float)         # Zoom-in im Opener (0.12 = 12 %); 0 = aus
+HERO_VOLUME = _env("HERO_VOLUME", 0.6, float)      # Lautstärke des Openers (Sprache wiederholt sich sonst laut)
+END_TEXT_SECONDS = _env("END_TEXT_SECONDS", 2.5, float)  # Abschluss-Text am Ende; 0 = aus
 LAYOUT = _env("LAYOUT", "blur")                    # blur | crop | fit
 FG_ZOOM = _env("FG_ZOOM", 1.15, float)             # Vergrößerung des Videos im blur-Layout
 CRF = _env("CRF", 21, int)
