@@ -139,10 +139,15 @@ def select(job: dict, an: dict, work: Path) -> dict:
     content.append({"type": "text", "text": build_prompt(job, an)})
     body = {"model": config.CLAUDE_MODEL, "max_tokens": 8000, "system": SYSTEM,
             "messages": [{"role": "user", "content": content}],
-            "tools": [TOOL], "tool_choice": {"type": "tool", "name": "submit_clips"}}
+            "tools": [TOOL], "tool_choice": {"type": "auto"}}
     last_err = ""
     for attempt in range(2):
         status, resp = claude_request(body)
+        if status == 400 and "tool" in str(resp).lower() and "tools" in body:
+            body = {k: v for k, v in body.items() if k not in ("tools", "tool_choice")}
+            body["messages"][0]["content"][-1]["text"] += ("\n\nReturn the result as a single JSON object with the keys "
+                                                          "scene_scores and clips, nothing else.")
+            status, resp = claude_request(body)
         if status != 200:
             raise RuntimeError(f"Claude-API HTTP {status}: {str(resp)[:400]}")
         (work / "claude_raw.json").write_text(json.dumps(resp, ensure_ascii=False, indent=1))
