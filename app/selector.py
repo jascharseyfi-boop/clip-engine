@@ -25,7 +25,7 @@ If the strongest moment comes later, start the body later.
 specific to what is on screen (e.g. "This boss is 50 stories tall"), never generic ("You won't believe this").
 - The end text re-states the topic so the viewer leaves with the game name and a reason to comment, \
 e.g. "Metaphor: ReFantazio — would you play it?" (max 8 words).
-- Respond with JSON only, no prose before or after."""
+- Always submit your answer through the submit_clips tool."""
 
 
 def _fmt_scenes(scenes):
@@ -76,10 +76,7 @@ shown in the last 2.5 seconds: game name + question or call to comment), a title
 a description (1-2 sentences, {lang_name}, include required campaign hashtags/mentions if the rules name any), \
 3-6 hashtags, and a short reason.
 
-Return exactly this JSON:
-{{"scene_scores": [{{"id": 0, "score": 7, "note": "short"}}],
-  "clips": [{{"start": 12.4, "end": 41.0, "hero_scene": 9, "hook": "...", "end_text": "...", "title": "...",
-             "description": "...", "hashtags": ["#..."], "reason": "...", "score": 8}}]}}"""
+Submit the result with the submit_clips tool."""
 
 
 def _parse_json(text: str) -> dict:
@@ -111,6 +108,27 @@ def claude_request(body: dict, timeout: float = 300) -> tuple[int, dict | str]:
     return last
 
 
+TOOL = {
+    "name": "submit_clips",
+    "description": "Submit the scene scores and the chosen clips.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "scene_scores": {"type": "array", "items": {"type": "object", "properties": {
+                "id": {"type": "integer"}, "score": {"type": "number"}, "note": {"type": "string"}},
+                "required": ["id", "score"]}},
+            "clips": {"type": "array", "items": {"type": "object", "properties": {
+                "start": {"type": "number"}, "end": {"type": "number"}, "hero_scene": {"type": "integer"},
+                "hook": {"type": "string"}, "end_text": {"type": "string"}, "title": {"type": "string"},
+                "description": {"type": "string"}, "hashtags": {"type": "array", "items": {"type": "string"}},
+                "reason": {"type": "string"}, "score": {"type": "number"}},
+                "required": ["start", "end", "hero_scene", "hook", "title", "description", "hashtags", "score"]}},
+        },
+        "required": ["clips"],
+    },
+}
+
+
 def select(job: dict, an: dict, work: Path) -> dict:
     if not config.ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY fehlt (Setup-Seite)")
@@ -119,13 +137,26 @@ def select(job: dict, an: dict, work: Path) -> dict:
         data = base64.standard_b64encode((work / sh["file"]).read_bytes()).decode()
         content.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}})
     content.append({"type": "text", "text": build_prompt(job, an)})
-    status, resp = claude_request({"model": config.CLAUDE_MODEL, "max_tokens": 6000, "system": SYSTEM,
-                                   "messages": [{"role": "user", "content": content}]})
-    if status != 200:
-        raise RuntimeError(f"Claude-API HTTP {status}: {str(resp)[:400]}")
-    text = "".join(b.get("text", "") for b in resp.get("content", []) if b.get("type") == "text")
-    (work / "claude_raw.txt").write_text(text)
-    result = _parse_json(text)
-    u = resp.get("usage", {})
-    result["usage"] = {"input_tokens": u.get("input_tokens", 0), "output_tokens": u.get("output_tokens", 0)}
-    return result
+    body = {"model": config.CLAUDE_MODEL, "max_tokens": 8000, "system": SYSTEM,
+            "messages": [{"role": "user", "content": content}],
+            "tools": [TOOL], "tool_choice": {"type": "tool", "name": "submit_clips"}}
+    last_err = ""
+    for attempt in range(2):
+        status, resp = claude_request(body)
+        if status != 200:
+            raise RuntimeError(f"Claude-API HTTP {status}: {str(resp)[:400]}")
+        (work / "claude_raw.json").write_text(json.dumps(resp, ensure_ascii=False, indent=1))
+        result = next((b.get("input") for b in resp.get("content", []) if b.get("type") == "tool_use"), None)
+        if result is None:  # Notfall: Text-Antwort parsen
+            text = "".join(b.get("text", "") for b in resp.get("content", []) if b.get("type") == "text")
+            try:
+                result = _parse_json(text)
+            except ValueError as e:
+                last_err = str(e)
+                continue
+        if result.get("clips"):
+            u = resp.get("usage", {})
+            result["usage"] = {"input_tokens": u.get("input_tokens", 0), "output_tokens": u.get("output_tokens", 0)}
+            return result
+        last_err = "keine Clips in Claudes Antwort"
+    raise RuntimeError(f"Claude-Antwort unbrauchbar ({last_err})")
