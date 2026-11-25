@@ -1,6 +1,7 @@
 """Setup-Seite im Browser (iPad): Schlüssel einfügen statt in der Web-Konsole abtippen."""
 import hmac
 import html
+import re
 import json
 import os
 import threading
@@ -44,6 +45,26 @@ def _check(code: str) -> str | None:
     return None
 
 
+SECRET_KEYS = {k for k, _, _, secret in FIELDS if secret}
+
+
+def _clean(key: str, v: str) -> str:
+    """Entfernt Leerzeichen, Zeilenumbrüche und unsichtbare Zeichen (iPad-Einfügen) aus Schlüsseln."""
+    v = v.strip()
+    if key in SECRET_KEYS or key.endswith("_ID"):
+        v = re.sub(r"[\s\u200b-\u200f\u2060\ufeff\u00a0]", "", v)
+        v = v.replace("\u2013", "-").replace("\u2014", "--")  # Gedankenstriche aus Autokorrektur
+    return v
+
+
+def _mask(v: str) -> str:
+    if not v:
+        return "leer"
+    if len(v) <= 14:
+        return f"{v[:3]}… ({len(v)} Zeichen)"
+    return f"{v[:10]}…{v[-4:]} ({len(v)} Zeichen)"
+
+
 def _current() -> dict:
     try:
         return json.loads(config.SETTINGS_FILE.read_text())
@@ -60,7 +81,7 @@ def setup_form(msg: str = ""):
         hint = "<small class=ok>gesetzt ✓ – leer lassen zum Behalten</small>" if (secret and val) else ""
         value = "" if secret else html.escape(val)
         rows.append(f"<label>{label}</label><input name={key} placeholder='{html.escape(ph)}' value='{value}' "
-                    f"autocomplete=off autocapitalize=off>{hint}")
+                    f"autocomplete=off autocapitalize=off autocorrect=off spellcheck=false>{hint}")
     return f"""<!doctype html>{CSS}<h2>Clip-Engine · Setup</h2>{msg}
 <form method=post action=/setup><label>Setup-Code</label><input name=code autocomplete=off autocapitalize=characters required>
 {''.join(rows)}<button>Speichern &amp; neu starten</button></form>"""
@@ -81,7 +102,7 @@ async def setup_save(request: Request):
         return setup_form(msg=f"<p class=err>{err}</p>")
     cur = _current()
     for key, *_ in FIELDS:
-        v = str(form.get(key, "")).strip()
+        v = _clean(key, str(form.get(key, "")))
         if v:
             cur[key] = v
     config.SETTINGS_FILE.write_text(json.dumps(cur, indent=1))
@@ -109,7 +130,10 @@ def setup_check(code: str):
             r = httpx.post("https://api.anthropic.com/v1/messages", timeout=30, headers={
                 "x-api-key": config.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01"},
                 json={"model": config.CLAUDE_MODEL, "max_tokens": 5, "messages": [{"role": "user", "content": "Hi"}]})
-            out.append(("Claude", r.status_code == 200, f"{config.CLAUDE_MODEL}: HTTP {r.status_code} {r.text[:160] if r.status_code != 200 else ''}"))
+            msg = f"{config.CLAUDE_MODEL}: OK" if r.status_code == 200 else (
+                f"HTTP {r.status_code} {r.text[:200]} – gespeichert: {_mask(config.ANTHROPIC_API_KEY)}. "
+                "Ein Key beginnt mit sk-ant-api03- und hat etwa 108 Zeichen.")
+            out.append(("Claude", r.status_code == 200, msg))
         except httpx.HTTPError as e:
             out.append(("Claude", False, str(e)))
     else:
@@ -117,8 +141,15 @@ def setup_check(code: str):
     # Telegram
     if config.TELEGRAM_BOT_TOKEN:
         from . import telegram
-        r = telegram.send_message(config.TELEGRAM_CHAT_ID, "✅ Clip-Engine ist verbunden.")
-        out.append(("Telegram", r.get("ok"), r.get("description", "Testnachricht gesendet")))
+        me = telegram._call("getMe", {})
+        if not me.get("ok"):
+            out.append(("Telegram", False, f"Token ungültig ({me.get('description')}) – gespeichert: {_mask(config.TELEGRAM_BOT_TOKEN)}. "
+                                            "Ein Token sieht so aus: 1234567890:AAH… (Zahlen, Doppelpunkt, ca. 35 Zeichen)"))
+        else:
+            r = telegram.send_message(config.TELEGRAM_CHAT_ID, "✅ Clip-Engine ist verbunden.")
+            bot = "@" + me["result"].get("username", "")
+            out.append(("Telegram", r.get("ok"), f"{bot}: " + ("Testnachricht gesendet" if r.get("ok") else
+                        f"{r.get('description')} – schreib {bot} zuerst /start und prüf die Chat-ID {config.TELEGRAM_CHAT_ID}")))
     else:
         out.append(("Telegram", False, "kein Token"))
     # Vizard
