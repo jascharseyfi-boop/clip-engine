@@ -45,6 +45,23 @@ def heuristic_select(an: dict, p: dict) -> dict:
     return {"scene_scores": [], "clips": clips}
 
 
+def _dedupe_tags(c: dict) -> None:
+    """Hashtags nur einmal: keine Doppelten in der Liste und keine, die schon in der Beschreibung stehen."""
+    import re
+    desc = c.get("description", "") or ""
+    seen, out = set(), []
+    for t in re.findall(r"#\w+", desc):
+        if t.lower() in seen:
+            desc = re.sub(r"\s*" + re.escape(t) + r"\b", "", desc, count=1) if desc.lower().count(t.lower()) > 1 else desc
+        seen.add(t.lower())
+    for t in c.get("hashtags") or []:
+        t = "#" + t.lstrip("#").strip()
+        if len(t) > 1 and t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(t)
+    c["description"], c["hashtags"] = desc.strip(), out
+
+
 def _overlap(a: dict, b: dict) -> float:
     inter = max(0.0, min(a["end"], b["end"]) - max(a["start"], b["start"]))
     return inter / max(0.1, min(a["end"] - a["start"], b["end"] - b["start"]))
@@ -116,6 +133,8 @@ def process(job_id: str) -> None:
         (work / "selection.json").write_text(json.dumps(sel, ensure_ascii=False, indent=1))
 
         # 4. Regeln + Schnitt
+        for c in sel.get("clips", []):
+            _dedupe_tags(c)
         cands = sorted(sel.get("clips", []), key=lambda c: c.get("score", 0), reverse=True)
         clips = []
         for c in cands:
