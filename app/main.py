@@ -255,9 +255,10 @@ def clip_action(job_id: str, n: int, a: ActionIn):
             f"<b>Titel</b> (antippen = kopieren)\n<code>{e(title)}</code>\n\n"
             f"<b>Beschreibung</b>\n<pre>{e(desc[:3000])}</pre>\n"
             f"<b>Tags</b>\n<code>{e(', '.join(tags + ['Shorts']))}</code>\n\n"
-            "1. Clip oben antippen → ⋯ → In Fotos sichern\n"
-            "2. YouTube Studio → ➕ → Short hochladen → Kanal EN\n"
-            "3. Titel/Beschreibung einfügen → Sichtbarkeit: Planen → Uhrzeit oben"), msg)
+            "1. Clip oben lange drücken → In Fotos sichern\n"
+            "2. studio.youtube.com (EN-Kanal) → Erstellen → Videos hochladen → Video aus Fotos\n"
+            "3. Titel + Beschreibung einfügen, „Nein, nicht speziell für Kinder“\n"
+            "4. Sichtbarkeit → Planen → Datum/Uhrzeit von oben → Planen"), msg)
         telegram.mark_message(chat, msg, f"▶️ YouTube {_fmt_local(when)}", keep_buttons={"inline_keyboard": [
             [{"text": f"▶️ YouTube {_fmt_local(when)}", "callback_data": "ce|noop"},
              {"text": "🎵 TikTok DE", "callback_data": f"ce|tt|{job_id}|{n}"}],
